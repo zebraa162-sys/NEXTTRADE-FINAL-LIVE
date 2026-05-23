@@ -53,6 +53,51 @@ At minimum set:
 - `REACT_APP_BACKEND_URL` → `https://yourdomain.com`
 - `CORS_ORIGINS` → `https://yourdomain.com` (or `*` while testing)
 - Leave `MONGO_URL=mongodb://mongo:27017` (compose-internal hostname).
+- **Email (Resend)** — see § 3.1 below.
+
+## 3.1 Email setup — Resend (verifies in ~5 minutes)
+
+The platform sends 9 transactional emails: signup OTP, welcome, password
+reset, login alert, deposit requested / approved / rejected, withdrawal
+requested / approved / rejected. All of them use **Resend** because port 25
+SMTP is blocked on most VPS providers including Flokinet — Resend is HTTPS
+API-based, free up to 3,000 emails/month, and integrates in a single key.
+
+**Step 1 — sign up**
+1. Create an account at https://resend.com (no credit card required)
+2. Dashboard → **Domains** → **Add Domain** → enter `nexttradx.com`
+3. Resend will show 3-4 DNS records. Add them at your registrar / Flokinet DNS:
+
+   | Type  | Name                    | Value                                        |
+   |-------|-------------------------|----------------------------------------------|
+   | TXT   | `send.nexttradx.com`    | Resend-provided SPF (`v=spf1 include:amazonses.com ~all`) |
+   | TXT   | `resend._domainkey.nexttradx.com` | DKIM public key (long string Resend provides) |
+   | MX    | `send.nexttradx.com`    | `feedback-smtp.us-east-1.amazonses.com` priority 10 |
+   | TXT   | `_dmarc.nexttradx.com`  | `v=DMARC1; p=none;`  *(optional but recommended)* |
+
+4. Click **Verify DNS Records** — it usually clears in 1-5 minutes.
+5. Dashboard → **API Keys** → **Create API Key** → copy the `re_...` key.
+
+**Step 2 — paste into `frontend/.env`**
+```
+RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+EMAIL_FROM=NEXT-TRADX <noreply@nexttradx.com>
+EMAIL_REPLY_TO=support@nexttradx.com
+APP_BRAND_URL=https://nexttradx.com
+```
+
+**Step 3 — test**
+After `docker compose up -d --build`, sign up with a real email at
+`https://nexttradx.com/signup`. You should receive the OTP email within
+3-10 seconds. To inspect any failed sends, hit
+`GET /api/admin/emails` while logged in as admin — it returns the last
+100 send attempts with status (`sent`, `failed`, or `unsent_no_key`).
+
+**Free-tier limits**
+- 3,000 emails / month, 100 / day
+- During free-tier *testing mode* (before the domain is verified) you can
+  only send to your own verified email — once the domain is verified, you
+  can send to anyone.
 
 ## 4. One-shot install
 
@@ -125,6 +170,8 @@ gunzip -c backup-2026-01-01.gz | \
 | Live forex feed empty after deploy     | Outbound HTTPS blocked — allow `query1.finance.yahoo.com` egress |
 | Toast "Trade Opened" never appears     | JWT_SECRET mismatch between builds — wipe `mongo_data` volume only if you don't have users |
 | Can't reach Mongo from app             | The compose hostname is `mongo` (NOT `localhost`)      |
+| Signup / reset email never arrives     | Check `GET /api/admin/emails` — status `unsent_no_key` means `RESEND_API_KEY` is missing; `failed` means Resend returned an error (usually unverified domain). |
+| Resend returns "domain not verified"   | DNS records haven't propagated yet — `dig TXT resend._domainkey.send.nexttradx.com` should show the DKIM key. Wait 5-10 min then click "Verify" again. |
 
 ---
 

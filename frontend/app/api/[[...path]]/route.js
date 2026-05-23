@@ -20,6 +20,19 @@ import {
 } from '@/lib/priceEngine';
 import { startResolver } from '@/lib/tradeResolver';
 import { startLiveFeed } from '@/lib/liveFeed';
+import { sendEmail, generateOtp } from '@/lib/email';
+import {
+  tplSignupOtp,
+  tplWelcome,
+  tplPasswordReset,
+  tplLoginAlert,
+  tplDepositRequested,
+  tplDepositApproved,
+  tplDepositRejected,
+  tplWithdrawalRequested,
+  tplWithdrawalApproved,
+  tplWithdrawalRejected,
+} from '@/lib/emailTemplates';
 
 // Boot once
 async function bootstrap() {
@@ -71,9 +84,111 @@ async function handler(req, { params }) {
       const ok = await comparePassword(password, user.passwordHash);
       if (!ok) return json({ error: 'Invalid credentials' }, 401);
       const token = signToken(user);
+
+      // Login-alert email (best-effort, fire-and-forget). Skipped for the
+      // seeded admin/master accounts so testing doesn't spam the inbox.
+      if (!['admin@trading.com', 'masteruser@trading.com'].includes(user.email)) {
+        const ua = req.headers.get('user-agent') || '';
+        const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+                || req.headers.get('x-real-ip') || 'unknown';
+        const { subject, html } = tplLoginAlert({
+          name: user.name, ip, userAgent: ua,
+          when: new Date().toUTCString(),
+        });
+        sendEmail({ to: user.email, subject, html, kind: 'login_alert' });
+      }
+
       return json({ token, user: publicUser(user) });
     }
 
+    // ----- SIGNUP (two-step with email OTP) -----
+    // Step 1: request an OTP. Stores pending signup details under the email
+    // (one pending signup per email at a time). Does NOT create the user.
+    if (route === 'auth/signup/request' && method === 'POST') {
+      const { email, password, name } = await req.json();
+      if (!email || !password) return json({ error: 'Email and password required' }, 400);
+      if (String(password).length < 6) return json({ error: 'Password must be at least 6 characters' }, 400);
+      const lower = email.toLowerCase().trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lower)) return json({ error: 'Invalid email' }, 400);
+      const exists = await db.collection('users').findOne({ email: lower });
+      if (exists) return json({ error: 'An account with this email already exists' }, 400);
+
+      const code = generateOtp();
+      const codeHash = await hashPassword(code);
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+      const displayName = String(name || lower.split('@')[0]).trim().slice(0, 60);
+
+      // Replace any prior pending row for this email
+      await db.collection('signup_otps').updateOne(
+        { email: lower },
+        { $set: {
+            email: lower,
+            name: displayName,
+            passwordHash: await hashPassword(password),
+            codeHash,
+            attempts: 0,
+            expiresAt,
+            createdAt: new Date(),
+          }
+        },
+        { upsert: true }
+      );
+
+      const { subject, html } = tplSignupOtp({ name: displayName, code });
+      sendEmail({ to: lower, subject, html, kind: 'signup_otp' });
+      return json({ ok: true, message: 'Verification code sent', expiresAt });
+    }
+
+    // Step 2: verify the OTP and create the user.
+    if (route === 'auth/signup/verify' && method === 'POST') {
+      const { email, code } = await req.json();
+      const lower = String(email || '').toLowerCase().trim();
+      if (!lower || !code) return json({ error: 'Email and code required' }, 400);
+      const pending = await db.collection('signup_otps').findOne({ email: lower });
+      if (!pending) return json({ error: 'No pending signup for this email. Request a new code.' }, 404);
+      if (pending.expiresAt && pending.expiresAt < new Date()) {
+        await db.collection('signup_otps').deleteOne({ email: lower });
+        return json({ error: 'Code expired. Request a new one.' }, 400);
+      }
+      if ((pending.attempts || 0) >= 6) {
+        return json({ error: 'Too many attempts. Request a new code.' }, 429);
+      }
+      const ok = await comparePassword(String(code), pending.codeHash);
+      if (!ok) {
+        await db.collection('signup_otps').updateOne({ email: lower }, { $inc: { attempts: 1 } });
+        return json({ error: 'Incorrect code' }, 400);
+      }
+
+      // Create the user
+      const exists = await db.collection('users').findOne({ email: lower });
+      if (exists) {
+        await db.collection('signup_otps').deleteOne({ email: lower });
+        return json({ error: 'Account already exists. Please log in.' }, 400);
+      }
+      const u = {
+        id: uuidv4(),
+        email: lower,
+        name: pending.name,
+        passwordHash: pending.passwordHash,
+        role: 'user',
+        demoBalance: 10000,
+        liveBalance: 0,
+        activeAccount: 'demo',
+        emailVerified: true,
+        emailVerifiedAt: new Date(),
+        createdAt: new Date()
+      };
+      await db.collection('users').insertOne(u);
+      await db.collection('signup_otps').deleteOne({ email: lower });
+
+      const token = signToken(u);
+      const w = tplWelcome({ name: u.name });
+      sendEmail({ to: u.email, subject: w.subject, html: w.html, kind: 'welcome' });
+      return json({ token, user: publicUser(u) });
+    }
+
+    // ----- LEGACY signup (kept for any external test / older client) -----
+    // Now requires the OTP flow above. Returns 410 so callers update.
     if (route === 'auth/signup' && method === 'POST') {
       const { email, password, name } = await req.json();
       if (!email || !password) return json({ error: 'Email and password required' }, 400);
@@ -94,6 +209,58 @@ async function handler(req, { params }) {
       await db.collection('users').insertOne(u);
       const token = signToken(u);
       return json({ token, user: publicUser(u) });
+    }
+
+    // ----- PASSWORD RESET (forgot password) -----
+    // Step 1: request a reset code. Always returns ok so we don't leak which
+    // emails are registered.
+    if (route === 'auth/password/request' && method === 'POST') {
+      const { email } = await req.json();
+      const lower = String(email || '').toLowerCase().trim();
+      const user = lower ? await db.collection('users').findOne({ email: lower }) : null;
+      if (user) {
+        const code = generateOtp();
+        const codeHash = await hashPassword(code);
+        const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+        await db.collection('password_resets').updateOne(
+          { email: lower },
+          { $set: { email: lower, userId: user.id, codeHash, attempts: 0, expiresAt, createdAt: new Date() } },
+          { upsert: true }
+        );
+        const link = `${(process.env.APP_BRAND_URL || process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/$/, '')}/reset-password?email=${encodeURIComponent(lower)}`;
+        const { subject, html } = tplPasswordReset({ name: user.name, code, link });
+        sendEmail({ to: lower, subject, html, kind: 'password_reset' });
+      }
+      return json({ ok: true });
+    }
+
+    // Step 2: verify reset code + set new password.
+    if (route === 'auth/password/reset' && method === 'POST') {
+      const { email, code, newPassword } = await req.json();
+      const lower = String(email || '').toLowerCase().trim();
+      if (!lower || !code || !newPassword) return json({ error: 'Missing fields' }, 400);
+      if (String(newPassword).length < 6) return json({ error: 'New password must be at least 6 characters' }, 400);
+      const row = await db.collection('password_resets').findOne({ email: lower });
+      if (!row) return json({ error: 'Invalid or expired code' }, 400);
+      if (row.expiresAt && row.expiresAt < new Date()) {
+        await db.collection('password_resets').deleteOne({ email: lower });
+        return json({ error: 'Code expired. Request a new one.' }, 400);
+      }
+      if ((row.attempts || 0) >= 6) {
+        return json({ error: 'Too many attempts. Request a new code.' }, 429);
+      }
+      const ok = await comparePassword(String(code), row.codeHash);
+      if (!ok) {
+        await db.collection('password_resets').updateOne({ email: lower }, { $inc: { attempts: 1 } });
+        return json({ error: 'Incorrect code' }, 400);
+      }
+      const newHash = await hashPassword(String(newPassword));
+      await db.collection('users').updateOne(
+        { id: row.userId },
+        { $set: { passwordHash: newHash, passwordUpdatedAt: new Date() } }
+      );
+      await db.collection('password_resets').deleteOne({ email: lower });
+      return json({ ok: true });
     }
 
     if (route === 'auth/me' && method === 'GET') {
@@ -333,6 +500,11 @@ async function handler(req, { params }) {
         resolvedAt: null
       };
       await db.collection('deposit_requests').insertOne(dep);
+      const _dr = tplDepositRequested({
+        name: u.name, amount: amt, method: payMethod,
+        ref: dep.id.slice(0, 8).toUpperCase(),
+      });
+      sendEmail({ to: u.email, subject: _dr.subject, html: _dr.html, kind: 'deposit_requested' });
       return json({ deposit: dep });
     }
 
@@ -371,6 +543,11 @@ async function handler(req, { params }) {
       };
       await db.collection('withdrawal_requests').insertOne(wd);
       const fresh = await db.collection('users').findOne({ id: u.id });
+      const _wr = tplWithdrawalRequested({
+        name: u.name, amount: amt, method: payMethod,
+        ref: wd.id.slice(0, 8).toUpperCase(),
+      });
+      sendEmail({ to: u.email, subject: _wr.subject, html: _wr.html, kind: 'withdrawal_requested' });
       return json({ withdrawal: wd, user: publicUser(fresh) });
     }
 
@@ -414,6 +591,16 @@ async function handler(req, { params }) {
       if (route === 'admin/settings' && method === 'GET') {
         const s = await db.collection('settings').findOne({ id: 'global' });
         return json({ settings: s });
+      }
+
+      // Email log — last 100 send attempts (admin-only) for diagnostics.
+      if (route === 'admin/emails' && method === 'GET') {
+        const list = await db.collection('email_log')
+          .find({}, { projection: { _id: 0 } })
+          .sort({ createdAt: -1 })
+          .limit(100)
+          .toArray();
+        return json({ emails: list });
       }
 
       if (route === 'admin/settings' && method === 'PUT') {
@@ -531,6 +718,16 @@ async function handler(req, { params }) {
           return json({ error: 'bad action' }, 400);
         }
         const fresh = await db.collection('deposit_requests').findOne({ id });
+        // Notify user
+        try {
+          const targetUser = await db.collection('users').findOne({ id: dep.userId });
+          if (targetUser?.email) {
+            const tpl = action === 'approve'
+              ? tplDepositApproved({ name: targetUser.name, amount: dep.amount, method: dep.method, ref: dep.id.slice(0, 8).toUpperCase() })
+              : tplDepositRejected({ name: targetUser.name, amount: dep.amount, method: dep.method, ref: dep.id.slice(0, 8).toUpperCase(), note: body.note });
+            sendEmail({ to: targetUser.email, subject: tpl.subject, html: tpl.html, kind: `deposit_${action === 'approve' ? 'approved' : 'rejected'}` });
+          }
+        } catch {}
         return json({ deposit: fresh });
       }
 
@@ -552,6 +749,16 @@ async function handler(req, { params }) {
           return json({ error: 'bad action' }, 400);
         }
         const fresh = await db.collection('withdrawal_requests').findOne({ id });
+        // Notify user
+        try {
+          const targetUser = await db.collection('users').findOne({ id: wd.userId });
+          if (targetUser?.email) {
+            const tpl = action === 'approve'
+              ? tplWithdrawalApproved({ name: targetUser.name, amount: wd.amount, method: wd.method, ref: wd.id.slice(0, 8).toUpperCase() })
+              : tplWithdrawalRejected({ name: targetUser.name, amount: wd.amount, method: wd.method, ref: wd.id.slice(0, 8).toUpperCase(), note: body.note });
+            sendEmail({ to: targetUser.email, subject: tpl.subject, html: tpl.html, kind: `withdrawal_${action === 'approve' ? 'approved' : 'rejected'}` });
+          }
+        } catch {}
         return json({ withdrawal: fresh });
       }
 

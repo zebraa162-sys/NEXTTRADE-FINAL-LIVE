@@ -111,6 +111,46 @@ workspace runs the `fastapi_react_mongo_shadcn` base image. Adapted layout:
 1. User can now redeploy to production from this new account when ready
 2. Await next user request
 
+## Email System — Resend Integration (2026-May-23 / final session)
+**Scope**: 9 transactional emails on a `noreply@nexttradx.com` sender. All beautifully branded for the NEXT-TRADX dark theme (table-based, inline-CSS, system-font HTML — passes Gmail / Outlook / Apple Mail).
+
+**Triggers implemented (all wired into the catch-all route handler):**
+1. `signup_otp` — 6-digit code, 10-min expiry, hashed in mongo (`signup_otps`)
+2. `welcome` — sent immediately after OTP verification
+3. `password_reset` — 6-digit code + secure reset link, 30-min expiry, mongo (`password_resets`)
+4. `login_alert` — sent on every non-seeded login with IP + device summary
+5. `deposit_requested` — auto-fired when user submits a deposit
+6. `deposit_approved` — auto-fired on admin approve
+7. `deposit_rejected` — auto-fired on admin reject (carries the admin note)
+8. `withdrawal_requested` — auto-fired on submit (notes funds escrowed)
+9. `withdrawal_approved` / `withdrawal_rejected` — admin action emails
+
+**New endpoints**
+- `POST /api/auth/signup/request` — sends OTP (step 1)
+- `POST /api/auth/signup/verify` — validates OTP, creates user, sends welcome (step 2)
+- `POST /api/auth/password/request` — forgot-password (anti-enumeration: always returns 200)
+- `POST /api/auth/password/reset` — code-gated password change
+- `GET  /api/admin/emails` — last 100 send attempts for admin diagnostics
+
+**New frontend pages**
+- `/signup` rewritten as 2-step flow: details → OTP entry (auto-formatted, 6-digit, paste-friendly, resend countdown)
+- `/reset-password` — symmetric forgot-password flow with the same OTP UX
+- `/login` — added "Forgot password?" link next to the password field
+
+**Library files (new)**
+- `lib/email.js` — Resend client wrapper, fire-and-forget dispatch, mongo `email_log`, graceful fallback when `RESEND_API_KEY` is unset
+- `lib/emailTemplates.js` — 10 branded templates (the 9 above + `tplWelcome` separately). All inline-CSS, table-based, dark theme with NEXT-TRADX hex logo as inline SVG data-URI.
+
+**Free-tier behavior**: When `RESEND_API_KEY` is missing (dev / staging), every send is queued into the `email_log` collection with status `unsent_no_key` and a 600-char html preview — so admin can verify wiring without burning real sends. When the key is set, sends are dispatched to Resend's HTTPS API and the same row is updated with `sent` or `failed` + provider ID.
+
+**Verification**
+- New focused test `/tmp/test_email.py` exercises all 9 triggers + edge cases (bad codes, expired codes, unknown emails, anti-enumeration) — **all pass**.
+- Manual browser test: `/signup` → OTP → verified → /trade. Full flow works in <10 seconds.
+- Visual review of all 10 rendered templates at 1200px via temporary preview page — branding, OTP code blocks, info cards, status pills all clean.
+- Full backend pytest suite re-run: **48 passed + 1 skipped**, no regressions.
+
+**Deploy guide updated** (`DEPLOY_FLOKINET.md` § 3.1) with the exact DNS records (SPF / DKIM / MX / DMARC) to add at the registrar, where to get the API key, and how to inspect the email log post-deploy. Troubleshooting table now includes Resend-specific failure modes.
+
 ## Trade Wedge Fix (2026-May-23, late session)
 **Bug**: When admin force-loss-ed an UP trade (or force-win-ed in the wrong direction),
 the recorded `outcome` was correct but the visible `closePrice` was on the WINNING side

@@ -54,7 +54,12 @@ export default function LoginPage() {
                 <Input data-testid="login-email-input" value={email} onChange={e => setEmail(e.target.value)} className="bg-[#0c1015] border-white/10 mt-1.5 h-11" type="email" required placeholder="you@example.com"/>
               </div>
               <div>
-                <Label className="text-white/70">Password</Label>
+                <div className="flex items-center justify-between">
+                  <Label className="text-white/70">Password</Label>
+                  <Link href="/reset-password" className="text-[11px] text-[#00b97a] hover:underline" data-testid="login-forgot-link">
+                    Forgot password?
+                  </Link>
+                </div>
                 <Input data-testid="login-password-input" value={password} onChange={e => setPassword(e.target.value)} className="bg-[#0c1015] border-white/10 mt-1.5 h-11" type="password" required placeholder="••••••••"/>
               </div>
               <Button data-testid="login-submit-btn" disabled={loading} className="w-full bg-[#00b97a] hover:bg-[#00a86d] h-11 font-semibold">

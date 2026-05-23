@@ -61,6 +61,16 @@ async function request(path, opts = {}) {
 export const api = {
   login: (email, password) => request('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   signup: (email, password, name) => request('/auth/signup', { method: 'POST', body: JSON.stringify({ email, password, name }) }),
+  // two-step OTP signup
+  signupRequest: (email, password, name) =>
+    request('/auth/signup/request', { method: 'POST', body: JSON.stringify({ email, password, name }) }),
+  signupVerify: (email, code) =>
+    request('/auth/signup/verify', { method: 'POST', body: JSON.stringify({ email, code }) }),
+  // forgot password
+  passwordRequest: (email) =>
+    request('/auth/password/request', { method: 'POST', body: JSON.stringify({ email }) }),
+  passwordReset: (email, code, newPassword) =>
+    request('/auth/password/reset', { method: 'POST', body: JSON.stringify({ email, code, newPassword }) }),
   me: () => request('/auth/me'),
   switchAccount: (account) => request('/auth/switch', { method: 'POST', body: JSON.stringify({ account }) }),
   resetDemo: () => request('/auth/reset-demo', { method: 'POST' }),

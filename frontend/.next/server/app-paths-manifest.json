@@ -1,6 +1,3 @@
 {
-  "/page": "app/page.js",
-  "/trade/page": "app/trade/page.js",
-  "/manifest.webmanifest/route": "app/manifest.webmanifest/route.js",
   "/api/[[...path]]/route": "app/api/[[...path]]/route.js"
 }
