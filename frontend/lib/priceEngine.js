@@ -304,7 +304,11 @@ function tickOTC(s, now) {
   let newPrice = s.price * Math.exp((mu - 0.5 * s.vol * s.vol) * dt + s.vol * Math.sqrt(dt) * z);
   // Hard clamp: keep OTC within ±0.4% of basePrice (which tracks live).
   // Prevents long-term drift that causes big visual gap with live feed.
-  if (s.anchored) {
+  // BUT: skip the clamp while a wedge is active so the resolver can move
+  // price across entry without the clamp tugging it back. The clamp resumes
+  // immediately after the wedge finishes, so natural mean-reversion will
+  // pull price back toward live within a few ticks.
+  if (s.anchored && s.nudgeTicksLeft === 0) {
     const maxDev = 0.004;
     const lo = s.basePrice * (1 - maxDev);
     const hi = s.basePrice * (1 + maxDev);
@@ -442,6 +446,20 @@ export function injectNudge(sym, relativeMagnitude, direction = 'up', ticks = 4)
   if (!s) return;
   s.pendingNudge = (direction === 'up' ? 1 : -1) * Math.abs(relativeMagnitude) / ticks;
   s.nudgeTicksLeft = ticks;
+}
+
+// Snap the engine's running price to an exact value and reflect it in the
+// current candle on every interval. Used by the trade resolver's safety net
+// when a forced outcome demands the close price land on a specific side of
+// entry — the chart must visibly show the reversal at expiry, not stay on
+// the winning side while the trade is recorded as a loss.
+export function snapPrice(sym, price) {
+  const s = global.__priceEngine.state[sym];
+  if (!s || !(price > 0)) return;
+  s.price = price;
+  const now = Date.now();
+  updateCandles(s, price, now);
+  notifyStreamers(s, { type: 'tick', price, t: now });
 }
 
 export function addStreamer(symbol, writer) {

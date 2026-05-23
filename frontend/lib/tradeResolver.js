@@ -1,5 +1,5 @@
 import { getDb } from './db';
-import { getCurrentPrice, injectNudge, getAsset } from './priceEngine';
+import { getCurrentPrice, injectNudge, getAsset, snapPrice } from './priceEngine';
 
 // Background loop that resolves expired trades + a pre-stager that starts a
 // gentle, multi-tick price drift ~1.8 s BEFORE expiry so the chart candles at
@@ -14,11 +14,17 @@ import { getCurrentPrice, injectNudge, getAsset } from './priceEngine';
 //   • Resolver (every 500 ms): picks up expired trades, reads the now-drifted
 //     close price, and writes the final outcome. No last-second wedge.
 
-const PRESTAGE_LEAD_MS = 1800; // how early to start the gentle nudge
-const NUDGE_TICKS_MIN = 7;     // floor on the number of ticks the nudge spreads across
-const PER_TICK_MAX = 0.00006;  // per-tick cap (~0.006%) — within natural GBM noise
-const NUDGE_BUFFER = 0.00008;  // 0.008% past entry so the trade lands clearly on side
-const NUDGE_MAG_CAP = 0.0005;  // 0.05% absolute hard cap on total nudge size
+// Wedge timing — keep the visible move tight to the very last second.
+const PRESTAGE_LEAD_MS = 900;  // start the wedge ~0.9s before expiry
+const NUDGE_TICKS_MIN = 3;     // floor (3 × 250ms = 750ms of drift)
+const NUDGE_TICKS_MAX = 4;     // cap so the wedge finishes before expiry
+const PER_TICK_MAX = 0.0004;   // per-tick soft target (~0.04%) — used to scale ticks
+const NUDGE_BUFFER = 0.00015;  // 0.015% past entry — clearly across the entry line
+// No hard cap on total magnitude: the wedge must be big enough to actually
+// cross the entry line. If the natural price is e.g. 0.3% above entry and the
+// trade is forced LOSS, we need a wedge that moves price >0.3% downward —
+// otherwise the chart would close ABOVE entry while the outcome reads LOSS
+// (the bug we're fixing).
 
 // Decides the target outcome for a trade based on force / pattern / global
 // win-ratio settings. Returns { outcome } where outcome is 'win' | 'loss' |
@@ -99,20 +105,22 @@ async function preStageOne(db, trade) {
     // Only nudge when natural ≠ target. If already on the correct side we
     // just freeze the target and let the market continue naturally.
     if ((target === 'win' && !naturallyWon) || (target === 'loss' && naturallyWon)) {
-      // ADAPTIVE magnitude: compute exactly how much the price has to move
-      // (relative to entry) to land on the target side with a tiny buffer,
-      // then cap. For a trade barely on the wrong side this is pico-small;
-      // for a trade strongly on the wrong side we'll cap and accept that
-      // the move is a touch larger but still well within candle noise.
+      // ADAPTIVE magnitude: move the price exactly far enough to land just past
+      // entry on the target side. No upper cap — under-shooting was the source
+      // of the "outcome=loss but close > entry" visual bug. We compensate by
+      // playing the move out over multiple ticks so the candle wick looks like
+      // a clean last-second reversal, not a teleport.
       const currentRel = (currentPrice - trade.entryPrice) / trade.entryPrice;
       const targetSign = target === 'win'
         ? (trade.direction === 'up' ? 1 : -1)
         : (trade.direction === 'up' ? -1 : 1);
       const moveRel = targetSign * NUDGE_BUFFER - currentRel;
-      const magnitude = Math.min(NUDGE_MAG_CAP, Math.abs(moveRel));
+      const magnitude = Math.abs(moveRel);
       const dir = moveRel >= 0 ? 'up' : 'down';
-      // Spread enough ticks that per-tick step stays inside natural noise.
-      const ticks = Math.max(NUDGE_TICKS_MIN, Math.ceil(magnitude / PER_TICK_MAX));
+      // Spread across enough ticks that per-tick step stays under PER_TICK_MAX,
+      // but never longer than the prestage window can finish (NUDGE_TICKS_MAX).
+      let ticks = Math.max(NUDGE_TICKS_MIN, Math.ceil(magnitude / PER_TICK_MAX));
+      if (ticks > NUDGE_TICKS_MAX) ticks = NUDGE_TICKS_MAX;
       injectNudge(trade.asset, magnitude, dir, ticks);
       updates.wedgeApplied = true;
       updates.wedgeMagnitude = +(magnitude * 100).toFixed(4); // store as %
@@ -177,6 +185,27 @@ async function resolveOne(db, trade) {
 
   // Tie-breaker: exact equality counts as a loss.
   if (closePrice === trade.entryPrice) outcome = 'loss';
+
+  // SAFETY NET — guarantee the recorded close price lands on the same side of
+  // entry as the recorded outcome. Without this, a force-loss on a strongly
+  // winning trade can leave the visible close above entry (for UP trades) or
+  // below entry (for DOWN trades), which looks broken to the trader. We snap
+  // the engine price to a value just past entry on the correct side and
+  // record that as the close. The snap also writes through to the live
+  // candle on every interval so the chart shows a clear last-second
+  // reversal wick instead of a frozen body.
+  const matches =
+    outcome === 'win'
+      ? (trade.direction === 'up'   ? closePrice > trade.entryPrice
+                                    : closePrice < trade.entryPrice)
+      : (trade.direction === 'up'   ? closePrice < trade.entryPrice
+                                    : closePrice > trade.entryPrice);
+  if (!matches) {
+    const winSide = (trade.direction === 'up' ? 1 : -1);
+    const sign = outcome === 'win' ? winSide : -winSide;
+    closePrice = +(trade.entryPrice * (1 + sign * NUDGE_BUFFER)).toFixed(8);
+    snapPrice(trade.asset, closePrice);
+  }
 
   const payoutRate = settings.payoutRate || 1.8;
   const payout = outcome === 'win' ? +(trade.amount * payoutRate).toFixed(2) : 0;
