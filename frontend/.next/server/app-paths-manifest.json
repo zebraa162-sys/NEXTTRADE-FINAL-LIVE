@@ -1,4 +1,9 @@
 {
-  "/page": "app/page.js",
-  "/api/[[...path]]/route": "app/api/[[...path]]/route.js"
+  "/login/page": "app/login/page.js",
+  "/api/[[...path]]/route": "app/api/[[...path]]/route.js",
+  "/trade/page": "app/trade/page.js",
+  "/transactions/page": "app/transactions/page.js",
+  "/trades-history/page": "app/trades-history/page.js",
+  "/support/page": "app/support/page.js",
+  "/admin/page": "app/admin/page.js"
 }
