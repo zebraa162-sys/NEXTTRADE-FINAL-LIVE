@@ -1,4 +1,7 @@
 {
   "/page": "app/page.js",
-  "/api/[[...path]]/route": "app/api/[[...path]]/route.js"
+  "/api/[[...path]]/route": "app/api/[[...path]]/route.js",
+  "/trade/page": "app/trade/page.js",
+  "/manifest.webmanifest/route": "app/manifest.webmanifest/route.js",
+  "/icon.svg/route": "app/icon.svg/route.js"
 }
