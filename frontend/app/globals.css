@@ -1,0 +1,111 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 25% 6%;
+    --foreground: 210 40% 98%;
+    --card: 222 24% 9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222 24% 9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 156 100% 36%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 222 18% 14%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 222 18% 14%;
+    --muted-foreground: 215 16% 65%;
+    --accent: 222 18% 16%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 100% 67%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 222 18% 18%;
+    --input: 222 18% 18%;
+    --ring: 156 100% 36%;
+    --radius: 0.6rem;
+    --chart-1: 156 100% 36%;
+    --chart-2: 0 100% 67%;
+    --chart-3: 200 90% 50%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 280 65% 60%;
+    --sidebar-background: 220 25% 5%;
+    --sidebar-foreground: 210 40% 90%;
+    --sidebar-primary: 156 100% 36%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 222 18% 14%;
+    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar-border: 222 18% 18%;
+    --sidebar-ring: 156 100% 36%;
+  }
+}
+
+html, body {
+  background: #0c1015;
+  color-scheme: dark;
+}
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground; font-family: 'Inter', -apple-system, system-ui, sans-serif; }
+}
+
+.qx-bg-grid {
+  background-image:
+    linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.glow-green { box-shadow: 0 0 0 1px rgba(0,185,122,.4), 0 8px 30px rgba(0,185,122,.25); }
+.glow-red   { box-shadow: 0 0 0 1px rgba(255,85,85,.4), 0 8px 30px rgba(255,85,85,.25); }
+
+.scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: #2a3140; border-radius: 4px; }
+.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .55; }
+}
+.pulse-soft { animation: pulse-soft 1.6s ease-in-out infinite; }
+
+/* Slow gradient shimmer for hero/banner */
+@keyframes gradient-x {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+.animate-gradient-x { background-size: 200% 200%; animation: gradient-x 6s ease infinite; }
+
+/* Glow pulse for action buttons */
+@keyframes glow-pulse-green {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(0,185,122,0.55), 0 6px 18px rgba(0,185,122,0.30); }
+  50%      { box-shadow: 0 0 0 6px rgba(0,185,122,0.05), 0 12px 28px rgba(0,185,122,0.45); }
+}
+@keyframes glow-pulse-red {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255,85,85,0.55), 0 6px 18px rgba(255,85,85,0.30); }
+  50%      { box-shadow: 0 0 0 6px rgba(255,85,85,0.05), 0 12px 28px rgba(255,85,85,0.45); }
+}
+.glow-pulse-green { animation: glow-pulse-green 2.4s ease-in-out infinite; }
+.glow-pulse-red   { animation: glow-pulse-red 2.4s ease-in-out infinite; }
+
+/* Subtle scale-in for hover cards */
+@keyframes float-y {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-2px); }
+}
+.float-y { animation: float-y 3s ease-in-out infinite; }
+
+/* Logo letter rainbow shift */
+@keyframes hue-shift {
+  from { filter: hue-rotate(0deg); }
+  to   { filter: hue-rotate(360deg); }
+}
+.hue-shift { animation: hue-shift 18s linear infinite; }
+
+/* Confetti-like sparkle */
+@keyframes sparkle {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+.sparkle { animation: sparkle 1.8s ease-in-out infinite; }
